@@ -81,7 +81,7 @@ export async function initDb() {
       expectedStatusCodes TEXT NOT NULL DEFAULT '2xx',
       notifyOnRecovery INTEGER NOT NULL DEFAULT 1,
       reminderIntervalSeconds INTEGER NOT NULL DEFAULT 0,
-      enabled INTEGER NOT NULL DEFAULT 0,
+      enabled INTEGER NOT NULL DEFAULT 1,
       currentStatus TEXT NOT NULL DEFAULT 'unknown',
       lastHttpStatus INTEGER,
       lastResponseTime INTEGER,
@@ -99,6 +99,8 @@ export async function initDb() {
   const migrations = [
     ['name', "ALTER TABLE monitors ADD COLUMN name TEXT NOT NULL DEFAULT 'Unnamed API'"],
     ['httpMethod', "ALTER TABLE monitors ADD COLUMN httpMethod TEXT NOT NULL DEFAULT 'GET'"],
+    ['requestHeaders', "ALTER TABLE monitors ADD COLUMN requestHeaders TEXT NOT NULL DEFAULT '{}'"],
+    ['requestBody', "ALTER TABLE monitors ADD COLUMN requestBody TEXT"],
     ['timeoutMs', 'ALTER TABLE monitors ADD COLUMN timeoutMs INTEGER NOT NULL DEFAULT 8000'],
     [
       'expectedStatusCodes',
@@ -164,6 +166,8 @@ export function normalizeMonitor(row) {
     name: row.name || row.apiUrl,
     apiUrl: row.apiUrl,
     httpMethod: row.httpMethod || 'GET',
+    requestHeaders: row.requestHeaders || '{}',
+    requestBody: row.requestBody || '',
     intervalSeconds: row.intervalSeconds,
     timeoutMs: row.timeoutMs || 8000,
     expectedStatusCodes: row.expectedStatusCodes || '2xx',

@@ -67,6 +67,10 @@ export function getMonitors(token) {
   return request('/api/monitors', { token });
 }
 
+export function getMonitorAnalytics(token, range) {
+  return request(`/api/monitors/analytics?range=${encodeURIComponent(range)}`, { token });
+}
+
 export function createMonitor(token, payload) {
   return request('/api/monitors', {
     token,
@@ -100,6 +104,22 @@ export function startMonitor(token, id) {
 
 export function stopMonitor(token, id) {
   return request(`/api/monitors/${id}/stop`, {
+    token,
+    method: 'POST',
+    body: JSON.stringify({}),
+  });
+}
+
+export function testMonitor(token, id) {
+  return request(`/api/monitors/${id}/test`, {
+    token,
+    method: 'POST',
+    body: JSON.stringify({}),
+  });
+}
+
+export function testAllMonitors(token) {
+  return request('/api/monitors/test-all', {
     token,
     method: 'POST',
     body: JSON.stringify({}),

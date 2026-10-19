@@ -4,15 +4,17 @@ import cors from 'cors';
 import express from 'express';
 import jwt from 'jsonwebtoken';
 import { all, closeDb, get, initDb, normalizeMonitor, run } from './db.js';
-import { validateEmailConfig } from './email/emailService.js';
-import { isValidHttpUrl } from './monitoring/healthCheck.js';
+import { getEmailConfigSummary, validateEmailConfig } from './email/emailService.js';
+import { validateMonitorTarget } from './monitoring/healthCheck.js';
 import {
   loadActiveMonitorJobs,
   rescheduleMonitorJob,
+  runCheck,
   startMonitorJob,
   stopAllMonitorJobs,
   stopMonitorJob,
 } from './monitoring/monitorService.js';
+import { getMonitorAnalytics } from './monitoring/analyticsService.js';
 
 const app = express();
 const PORT = Number(process.env.PORT || 5000);
@@ -66,7 +68,7 @@ function validateInterval(value) {
 
 const ALLOWED_METHODS = new Set(['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']);
 
-function validateMonitorConfig(body, existing = {}) {
+async function validateMonitorConfig(body, existing = {}) {
   const name = String(body.name || existing.name || '').trim();
   const apiUrl = String(body.apiUrl || existing.apiUrl || '').trim();
   const httpMethod = String(body.httpMethod || existing.httpMethod || 'GET').toUpperCase();
@@ -81,14 +83,32 @@ function validateMonitorConfig(body, existing = {}) {
     typeof body.notifyOnRecovery === 'boolean'
       ? Number(body.notifyOnRecovery)
       : Number(existing.notifyOnRecovery === undefined ? 1 : existing.notifyOnRecovery);
+  const enabled =
+    typeof body.enabled === 'boolean'
+      ? Number(body.enabled)
+      : Number(existing.enabled === undefined ? 1 : existing.enabled);
+  const requestHeadersValue = body.requestHeaders ?? existing.requestHeaders ?? '{}';
+  let requestHeaders;
+  try {
+    requestHeaders = typeof requestHeadersValue === 'string' ? JSON.parse(requestHeadersValue || '{}') : requestHeadersValue;
+  } catch {
+    return { error: 'Request headers must be valid JSON.' };
+  }
 
   if (!name) return { error: 'API name is required.' };
-  if (!isValidHttpUrl(apiUrl)) return { error: 'Enter a valid HTTP or HTTPS API URL.' };
+  const target = await validateMonitorTarget(apiUrl);
+  if (!target.valid) return { error: target.error };
   if (!ALLOWED_METHODS.has(httpMethod)) return { error: 'Enter a supported HTTP method.' };
   if (!Number.isFinite(timeoutMs)) return { error: 'Timeout must be a valid number.' };
   if (!/^(?:[2345]xx|\d{3})(?:\s*,\s*(?:[2345]xx|\d{3}))*$/i.test(expectedStatusCodes)) {
     return { error: 'Expected status codes must look like 2xx or 200,201.' };
   }
+  if (!requestHeaders || typeof requestHeaders !== 'object' || Array.isArray(requestHeaders)) {
+    return { error: 'Request headers must be a JSON object.' };
+  }
+  if (Object.keys(requestHeaders).length > 30) return { error: 'Use no more than 30 request headers.' };
+  const requestBody = body.requestBody ?? existing.requestBody ?? '';
+  if (String(requestBody).length > 50000) return { error: 'Request body must be 50 KB or smaller.' };
 
   return {
     name,
@@ -99,6 +119,9 @@ function validateMonitorConfig(body, existing = {}) {
     expectedStatusCodes,
     notifyOnRecovery,
     reminderIntervalSeconds,
+    enabled,
+    requestHeaders: JSON.stringify(requestHeaders),
+    requestBody: String(requestBody),
   };
 }
 
@@ -124,7 +147,13 @@ function requireAuth(request, response, next) {
 
 async function getOwnedMonitor(monitorId, userId) {
   const row = await get('SELECT * FROM monitors WHERE id = ? AND userId = ?', [monitorId, userId]);
-  return normalizeMonitor(row);
+  const monitor = normalizeMonitor(row);
+  if (!monitor) return null;
+  const uptime = await get(
+    `SELECT COUNT(*) AS totalChecks, SUM(CASE WHEN currentStatus = 'healthy' THEN 1 ELSE 0 END) AS healthyChecks FROM healthChecks WHERE monitorId = ?`,
+    [monitor.id],
+  );
+  return { ...monitor, uptimePercent: uptime.totalChecks ? Math.round((uptime.healthyChecks / uptime.totalChecks) * 10000) / 100 : null };
 }
 
 app.get('/api/health', (_request, response) => {
@@ -208,7 +237,8 @@ app.get(
     const rows = await all('SELECT * FROM monitors WHERE userId = ? ORDER BY id DESC', [
       request.user.id,
     ]);
-    response.json({ monitors: rows.map(normalizeMonitor) });
+    const monitors = await Promise.all(rows.map((row) => getOwnedMonitor(row.id, request.user.id)));
+    response.json({ monitors });
   }),
 );
 
@@ -216,7 +246,7 @@ app.post(
   '/api/monitors',
   requireAuth,
   asyncHandler(async (request, response) => {
-    const config = validateMonitorConfig(request.body);
+    const config = await validateMonitorConfig(request.body);
     if (config.error) return response.status(400).json({ error: config.error });
 
     const result = await run(
@@ -226,6 +256,8 @@ app.post(
           name,
           apiUrl,
           httpMethod,
+          requestHeaders,
+          requestBody,
           intervalSeconds,
           timeoutMs,
           expectedStatusCodes,
@@ -234,18 +266,21 @@ app.post(
           enabled,
           currentStatus,
           createdAt
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'unknown', ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'unknown', ?)
       `,
       [
         request.user.id,
         config.name,
         config.apiUrl,
         config.httpMethod,
+        config.requestHeaders,
+        config.requestBody,
         config.intervalSeconds,
         config.timeoutMs,
         config.expectedStatusCodes,
         config.notifyOnRecovery,
         config.reminderIntervalSeconds,
+        config.enabled,
         new Date().toISOString(),
       ],
     );
@@ -266,14 +301,16 @@ app.put(
       return response.status(404).json({ error: 'Monitor not found.' });
     }
 
-    const config = validateMonitorConfig(request.body, monitor);
+    const config = await validateMonitorConfig(request.body, monitor);
     if (config.error) return response.status(400).json({ error: config.error });
     const enabled =
       typeof request.body.enabled === 'boolean' ? Number(request.body.enabled) : Number(monitor.enabled);
     const configurationChanged =
       config.apiUrl !== monitor.apiUrl ||
       config.httpMethod !== monitor.httpMethod ||
-      config.expectedStatusCodes !== monitor.expectedStatusCodes;
+      config.expectedStatusCodes !== monitor.expectedStatusCodes ||
+      config.requestHeaders !== monitor.requestHeaders ||
+      config.requestBody !== monitor.requestBody;
 
     await run(
       `
@@ -282,6 +319,8 @@ app.put(
           name = ?,
           apiUrl = ?,
           httpMethod = ?,
+          requestHeaders = ?,
+          requestBody = ?,
           intervalSeconds = ?,
           timeoutMs = ?,
           expectedStatusCodes = ?,
@@ -301,6 +340,8 @@ app.put(
         config.name,
         config.apiUrl,
         config.httpMethod,
+        config.requestHeaders,
+        config.requestBody,
         config.intervalSeconds,
         config.timeoutMs,
         config.expectedStatusCodes,
@@ -405,6 +446,49 @@ app.get(
   }),
 );
 
+app.post(
+  '/api/monitors/:id/test',
+  requireAuth,
+  asyncHandler(async (request, response) => {
+    const monitorId = Number(request.params.id);
+    const monitor = await getOwnedMonitor(monitorId, request.user.id);
+    if (!monitor) return response.status(404).json({ error: 'Monitor not found.' });
+
+    await run("UPDATE monitors SET currentStatus = 'checking' WHERE id = ? AND userId = ?", [
+      monitorId,
+      request.user.id,
+    ]);
+    await runCheck(monitorId, { force: true });
+    response.json({ monitor: await getOwnedMonitor(monitorId, request.user.id) });
+  }),
+);
+
+app.post(
+  '/api/monitors/test-all',
+  requireAuth,
+  asyncHandler(async (request, response) => {
+    const monitors = await all('SELECT id FROM monitors WHERE userId = ?', [request.user.id]);
+    await Promise.all(monitors.map(({ id }) => runCheck(id, { force: true })));
+    const updated = await all('SELECT * FROM monitors WHERE userId = ? ORDER BY id DESC', [request.user.id]);
+    const monitorsWithUptime = await Promise.all(updated.map((row) => getOwnedMonitor(row.id, request.user.id)));
+    response.json({ monitors: monitorsWithUptime });
+  }),
+);
+
+app.get(
+  '/api/monitors/analytics',
+  requireAuth,
+  asyncHandler(async (request, response) => {
+    const range = String(request.query.range || '24h');
+    try {
+      response.json(await getMonitorAnalytics(request.user.id, range));
+    } catch (error) {
+      if (error.code === 'INVALID_ANALYTICS_RANGE') return response.status(400).json({ error: error.message });
+      throw error;
+    }
+  }),
+);
+
 app.get(
   '/api/monitors/:id/history',
   requireAuth,
@@ -452,6 +536,11 @@ app.use((error, _request, response, _next) => {
 });
 
 validateEmailConfig();
+const emailConfig = getEmailConfigSummary();
+console.info(
+  `[email] provider=${emailConfig.provider} senderConfigured=${emailConfig.hasSender} ` +
+    `resendKeyConfigured=${emailConfig.hasResendKey} smtpConfigured=${emailConfig.hasSmtpHost && emailConfig.hasSmtpUser && emailConfig.hasSmtpPass}`,
+);
 await initDb();
 await loadActiveMonitorJobs();
 

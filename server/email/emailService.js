@@ -10,6 +10,24 @@ function getSenderAddress() {
   return process.env.EMAIL_FROM || process.env.ALERT_FROM_EMAIL;
 }
 
+function getRecipientLabel(value) {
+  const email = String(value || '');
+  const at = email.indexOf('@');
+  return at > 1 ? `${email[0]}***${email.slice(at)}` : 'unknown';
+}
+
+export function getEmailConfigSummary() {
+  const provider = getProvider();
+  return {
+    provider,
+    hasSender: Boolean(getSenderAddress()),
+    hasResendKey: Boolean(process.env.RESEND_API_KEY),
+    hasSmtpHost: Boolean(process.env.SMTP_HOST),
+    hasSmtpUser: Boolean(process.env.SMTP_USER),
+    hasSmtpPass: Boolean(process.env.SMTP_PASS),
+  };
+}
+
 export function validateEmailConfig() {
   const provider = getProvider();
 
@@ -119,6 +137,9 @@ export async function sendMonitorAlert({ type, monitor, result, userEmail }) {
       : buildFailureEmail({ monitor, result, to: userEmail });
 
   const provider = getProvider();
+  console.info(
+    `[email] alert attempt monitor=${monitor.id} type=${type} provider=${provider} recipient=${getRecipientLabel(userEmail)}`,
+  );
   const info =
     provider === 'resend' ? await sendWithResend(message) : await getTransporter().sendMail(message);
 
@@ -138,7 +159,7 @@ export async function sendMonitorAlert({ type, monitor, result, userEmail }) {
     console.log(info.message);
   }
 
-  return info;
+  return { ...info, deliveryStatus: provider === 'console' ? 'preview' : 'sent' };
 }
 
 async function sendWithResend(message) {

@@ -43,15 +43,18 @@ async function recordNotification({ monitor, type, result, userEmail }) {
 
   try {
     const info = await sendMonitorAlert({ type, monitor, result, userEmail });
+    console.info(
+      `[alert] provider accepted monitor=${monitor.id} type=${type} status=${info.deliveryStatus || 'sent'}`,
+    );
     await run(
       `
         INSERT INTO notificationHistory
           (monitorId, userId, type, status, recipient, subject, failureReason, sentAt, providerMessageId, errorMessage)
-        VALUES (?, ?, ?, 'sent', ?, ?, ?, ?, ?, NULL)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
       `,
-      [monitor.id, monitor.userId, type, userEmail, subject, result.lastError, sentAt, info.messageId || null],
+      [monitor.id, monitor.userId, type, info.deliveryStatus || 'sent', userEmail, subject, result.lastError, sentAt, info.messageId || null],
     );
-    return { status: 'sent', sentAt };
+    return { status: info.deliveryStatus || 'sent', sentAt };
   } catch (error) {
     await run(
       `
@@ -61,7 +64,7 @@ async function recordNotification({ monitor, type, result, userEmail }) {
       `,
       [monitor.id, monitor.userId, type, userEmail, subject, result.lastError, sentAt, error.message],
     );
-    console.error(`Email alert failed for monitor ${monitor.id}:`, error.message);
+    console.error(`[alert] provider failed monitor=${monitor.id} type=${type}: ${error.message}`);
     return { status: 'failed', sentAt };
   }
 }
@@ -79,6 +82,7 @@ async function updateAlertState({ monitor, result }) {
     Date.now() - lastAlertTime >= monitor.reminderIntervalSeconds * 1000;
 
   if (nextBucket === 'down' && previousAlertState !== 'down') {
+    console.info(`[alert] unhealthy transition monitor=${monitor.id} previous=${previousAlertState || 'none'}`);
     const notification = await recordNotification({ monitor, type: 'failure', result, userEmail: monitor.userEmail });
     lastAlertState = 'down';
     lastAlertAt = notification.sentAt;
@@ -129,14 +133,14 @@ async function persistResult(monitor, result) {
   );
 }
 
-export async function runCheck(monitorId) {
+export async function runCheck(monitorId, { force = false } = {}) {
   const id = Number(monitorId);
   if (inFlightChecks.has(id)) return;
   inFlightChecks.add(id);
 
   try {
     const row = await loadMonitorWithUser(id);
-    if (!row || !row.enabled) {
+    if (!row || (!row.enabled && !force)) {
       stopMonitorJob(id);
       return;
     }
@@ -144,7 +148,9 @@ export async function runCheck(monitorId) {
     await run("UPDATE monitors SET currentStatus = 'checking' WHERE id = ? AND userId = ?", [id, row.userId]);
     const monitor = normalizeMonitor(row);
     monitor.userEmail = row.userEmail;
-    const result = await checkApiHealth(row.apiUrl, monitor);
+    let requestHeaders = {};
+    try { requestHeaders = JSON.parse(row.requestHeaders || '{}'); } catch { requestHeaders = {}; }
+    const result = await checkApiHealth(row.apiUrl, { ...monitor, requestHeaders, requestBody: row.requestBody });
     await persistResult(monitor, result);
   } finally {
     inFlightChecks.delete(id);
