@@ -17,6 +17,7 @@ const { checkApiHealth } = await import('../server/monitoring/healthCheck.js');
 const { getMonitorAnalytics } = await import('../server/monitoring/analyticsService.js');
 const { loadActiveMonitorJobs, runCheck, stopAllMonitorJobs } = await import('../server/monitoring/monitorService.js');
 const { sendMonitorAlert, validateEmailConfig } = await import('../server/email/emailService.js');
+const { getPasswordValidation } = await import('../server/auth/passwordValidation.js');
 
 let localServer;
 let localServerUrl;
@@ -100,6 +101,16 @@ test('classifies healthy and HTTP 500 responses', async () => {
   const failed = await checkApiHealth(localServerUrl, { timeoutMs: 200 });
   assert.equal(failed.currentStatus, 'unhealthy');
   assert.equal(failed.lastHttpStatus, 500);
+});
+
+test('validates all password requirements without changing the password', () => {
+  for (const password of ['Hello@123', 'Secure#456']) {
+    assert.equal(getPasswordValidation(password).valid, true);
+  }
+
+  for (const password of ['hello@123', 'HELLO@123', 'HelloWorld@', 'Hello1234', 'Ab@1', '']) {
+    assert.equal(getPasswordValidation(password).valid, false);
+  }
 });
 
 test('classifies unreachable APIs and timeouts', async () => {

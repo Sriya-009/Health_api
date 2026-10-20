@@ -5,6 +5,7 @@ import {
   getStoredSession, login, signup, storeSession, testAllMonitors, testMonitor,
   updateMonitor, startMonitor, stopMonitor,
 } from './services/apiClient';
+import { getPasswordRequirements, getPasswordValidation } from './services/passwordValidation';
 
 const EMPTY_FORM = {
   name: '', apiUrl: '', httpMethod: 'GET', expectedStatusCodes: '2xx', intervalSeconds: 60,
@@ -22,10 +23,16 @@ function AuthPage({ mode, onModeChange, onAuthenticated }) {
   const [form, setForm] = useState({ name: '', email: '', password: '', confirmPassword: '' });
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmation, setShowConfirmation] = useState(false);
+  const passwordValidation = getPasswordValidation(form.password);
+  const confirmationValid = form.password === form.confirmPassword;
   const submit = async (event) => {
     event.preventDefault(); setError('');
     if (signupMode && !form.name.trim()) return setError('Name is required.');
-    if (signupMode && form.password !== form.confirmPassword) return setError('Passwords do not match.');
+    if (!form.password) return setError('Password is required.');
+    if (signupMode && !passwordValidation.valid) return setError('Password does not meet all requirements.');
+    if (signupMode && !confirmationValid) return setError('Passwords do not match.');
     setLoading(true);
     try { const session = signupMode ? await signup(form) : await login(form); storeSession(session); onAuthenticated(session); }
     catch (error) { setError(error.message); } finally { setLoading(false); }
@@ -36,8 +43,9 @@ function AuthPage({ mode, onModeChange, onAuthenticated }) {
     <form className="auth-form" onSubmit={submit}>
       {signupMode && <label>Name<input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} required /></label>}
       <label>Email<input type="email" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} required /></label>
-      <label>Password<input type="password" value={form.password} onChange={e => setForm({ ...form, password: e.target.value })} minLength="6" required /></label>
-      {signupMode && <label>Confirm password<input type="password" value={form.confirmPassword} onChange={e => setForm({ ...form, confirmPassword: e.target.value })} minLength="6" required /></label>}
+      <label>Password<div className="password-input"><input type={showPassword ? 'text' : 'password'} value={form.password} onChange={e => setForm({ ...form, password: e.target.value })} minLength="8" required /><button className="password-toggle" type="button" onClick={() => setShowPassword(value => !value)}>{showPassword ? 'Hide' : 'Show'}</button></div></label>
+      {signupMode && <div className="password-guidance" aria-live="polite"><p>Password requirements</p><ul>{getPasswordRequirements().map(({ key, label }) => <li className={passwordValidation.rules[key] ? 'requirement-met' : ''} key={key}>{passwordValidation.rules[key] ? '✓' : '○'} {label}</li>)}</ul><div className="password-strength">Strength: <strong>{passwordValidation.strength}</strong>{passwordValidation.valid && <span>All requirements met</span>}</div></div>}
+      {signupMode && <label>Confirm password<div className="password-input"><input type={showConfirmation ? 'text' : 'password'} value={form.confirmPassword} onChange={e => setForm({ ...form, confirmPassword: e.target.value })} minLength="8" required /> <button className="password-toggle" type="button" onClick={() => setShowConfirmation(value => !value)}>{showConfirmation ? 'Hide' : 'Show'}</button></div>{form.confirmPassword && !confirmationValid && <span className="field-error">Passwords do not match.</span>}</label>}
       {error && <p className="form-error">{error}</p>}<button type="submit" disabled={loading}>{loading ? 'Connecting...' : signupMode ? 'Create account' : 'Sign in'}</button>
     </form><button className="link-button" type="button" onClick={() => onModeChange(signupMode ? 'login' : 'signup')}>{signupMode ? 'Already have an account? Sign in' : 'Create a new account'}</button>
   </section></main>;

@@ -6,6 +6,7 @@ import jwt from 'jsonwebtoken';
 import { all, closeDb, get, initDb, normalizeMonitor, run } from './db.js';
 import { getEmailConfigSummary, validateEmailConfig } from './email/emailService.js';
 import { validateMonitorTarget } from './monitoring/healthCheck.js';
+import { getPasswordValidation } from './auth/passwordValidation.js';
 import {
   loadActiveMonitorJobs,
   rescheduleMonitorJob,
@@ -175,8 +176,8 @@ app.post(
   asyncHandler(async (request, response) => {
     const name = String(request.body.name || '').trim();
     const email = String(request.body.email || '').trim().toLowerCase();
-    const password = String(request.body.password || '');
-    const confirmPassword = String(request.body.confirmPassword || '');
+    const password = typeof request.body.password === 'string' ? request.body.password : '';
+    const confirmPassword = typeof request.body.confirmPassword === 'string' ? request.body.confirmPassword : '';
 
     if (!name) {
       return response.status(400).json({ error: 'Name is required.' });
@@ -186,8 +187,11 @@ app.post(
       return response.status(400).json({ error: 'Enter a valid email address.' });
     }
 
-    if (password.length < 6) {
-      return response.status(400).json({ error: 'Password must be at least 6 characters.' });
+    const passwordValidation = getPasswordValidation(password);
+    if (!passwordValidation.valid) {
+      return response.status(400).json({
+        error: `Password must include ${passwordValidation.message.toLowerCase()}.`,
+      });
     }
 
     if (password !== confirmPassword) {
