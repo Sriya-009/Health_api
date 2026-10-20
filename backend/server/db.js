@@ -1,9 +1,13 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import sqlite3 from 'sqlite3';
 
-const DEFAULT_DB_PATH = path.join(process.cwd(), 'server', 'data', 'monitoring.sqlite');
-const dbPath = process.env.DATABASE_PATH || DEFAULT_DB_PATH;
+const SERVER_DIRECTORY = path.dirname(fileURLToPath(import.meta.url));
+const configuredDbPath = process.env.DATABASE_PATH;
+const dbPath = configuredDbPath
+  ? path.resolve(process.cwd(), configuredDbPath)
+  : path.join(SERVER_DIRECTORY, 'data', 'monitoring.sqlite');
 
 let db;
 

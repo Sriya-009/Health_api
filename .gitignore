@@ -1,9 +1,12 @@
-node_modules
-dist
+node_modules/
+dist/
+.vite/
+frontend/dist/
+backend/.env
+frontend/.env
 .env
 .env.local
-server/data
-*.sqlite
+backend/server/data/*.sqlite
 *.sqlite-shm
 *.sqlite-wal
 npm-debug.log*

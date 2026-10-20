@@ -1,80 +1,78 @@
 # API Health Monitoring
 
-A React/Vite dashboard backed by an Express server, SQLite, and a server-side monitoring worker. Enabled monitors continue checking while the browser is closed because the worker runs in the backend process.
+A React/Vite dashboard backed by an Express server, SQLite, JWT authentication, and a server-side monitoring worker. Enabled monitors continue checking while the browser is closed because the worker runs in the backend process.
 
-## Setup
+## Project structure
 
-1. Install dependencies:
+- `frontend/`: React/Vite dashboard and browser-safe configuration.
+- `backend/`: Express API, monitoring worker, email delivery, SQLite initialization, and backend-only secrets.
+- `backend/server/data/monitoring.sqlite`: existing SQLite database. It is preserved and is not recreated by this reorganization.
 
-   ```powershell
-   npm install
-   ```
+## Local setup
 
-2. Copy `.env.example` to `.env` and set a long local `JWT_SECRET`. Keep `.env` private and never commit it.
-
-3. Initialize the database without deleting existing data:
-
-   ```powershell
-   npm run db:init
-   ```
-
-## Run
-
-Open two VS Code terminals in the project root.
-
-Backend:
+### Backend
 
 ```powershell
-npm run server
+cd backend
+npm install
+Copy-Item .env.example .env
 ```
 
-Frontend:
-
-```powershell
-npm run dev
-```
-
-Open `http://localhost:5173`.
-
-The backend resumes enabled monitors on startup. Stop the backend with Ctrl+C only after checks are complete.
-
-## Email alerts
-
-Development uses `EMAIL_PROVIDER=console`, which records notification history and prints a Nodemailer JSON preview without contacting a provider.
-
-For Resend, set `EMAIL_PROVIDER=resend`, set `RESEND_API_KEY` in the backend-only `.env`, and set `EMAIL_FROM` to a sender/domain verified in Resend. The server sends `POST https://api.resend.com/emails` directly from Node using the key; the key is never included in Vite variables or API responses. `ALERT_TO_EMAIL` is not used for monitor notifications because each alert must go to the owning user's account email.
-
-Resend setup:
-
-1. Verify a sending domain or sender in the Resend dashboard.
-2. Create a Resend API key and put it only in the root `.env` as `RESEND_API_KEY`.
-3. Set `EMAIL_PROVIDER=resend` and `EMAIL_FROM` to the verified sender.
-4. Restart `npm run server`.
-
-The backend validates these settings at startup. It records an alert as sent only when Resend returns a successful response containing an email ID. Without a real key and verified sender, use console mode; real delivery has not been tested by this project setup.
-
-For real delivery, set `EMAIL_PROVIDER=smtp` and configure these variables in `.env`:
-
-- `SMTP_HOST`: your provider's SMTP hostname
-- `SMTP_PORT`: commonly `587` for STARTTLS or `465` for implicit TLS
-- `SMTP_SECURE`: `false` for STARTTLS on 587, `true` for 465
-- `SMTP_USER`: the provider account or mailbox
-- `SMTP_PASS`: an app password or provider-specific SMTP credential, never a normal account password when the provider supports app passwords
-- `EMAIL_FROM`: a verified sender address
-
-The server refuses to start in SMTP mode if required settings are missing. It does not log credential values. An alert is recorded as sent only after Nodemailer reports the recipient as accepted.
-
-## Checks
+Edit `backend/.env` and set a long, private `JWT_SECRET`. The default `DATABASE_PATH=server/data/monitoring.sqlite` keeps the existing database under `backend/server/data/`. You can use an absolute path for a separately managed database. Initialize safely with:
 
 ```powershell
 npm run db:init
-npm run build
-npm test
+npm run server
 ```
 
-The test suite uses local HTTP servers and a temporary SQLite database. It does not call or overload external APIs.
+The API listens on `http://localhost:5000` by default and resumes enabled monitors at startup.
 
-## API verification
+### Frontend
+
+```powershell
+cd frontend
+npm install
+Copy-Item .env.example .env
+npm run dev
+```
+
+The dashboard runs at `http://localhost:5173`. `VITE_API_BASE_URL` is the only frontend variable and is exposed to browser code, so it must never contain secrets. Set it to `http://localhost:5000` for local direct API requests or to the deployed backend URL. The Vite proxy remains configured for `/api` local development when the variable is left empty.
+
+## Email alerts
+
+Keep all email credentials in `backend/.env`. `EMAIL_PROVIDER=console` is safe for development and records notification history while printing a Nodemailer preview. For Resend, set `EMAIL_PROVIDER=resend`, `RESEND_API_KEY`, and a verified `EMAIL_FROM`. For SMTP, set `EMAIL_PROVIDER=smtp` plus `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASS`, and `EMAIL_FROM`. The backend validates provider settings at startup and never exposes credentials to the frontend.
+
+## Deployment
+
+Deploy `frontend/` as a Vite static site on Vercel, Netlify, or similar:
+
+1. Use `frontend` as the project root.
+2. Run `npm install` and `npm run build`.
+3. Publish `dist`.
+4. Set `VITE_API_BASE_URL` to the public backend URL at build time.
+
+Deploy `backend/` to a Node host such as Render:
+
+1. Use `backend` as the service root.
+2. Run `npm install`; start with `npm run server`.
+3. Set `PORT`, `FRONTEND_ORIGIN` to the exact frontend origin, `JWT_SECRET`, and `DATABASE_PATH` as platform variables.
+4. Configure email variables if real alerts are required.
+5. Use persistent storage for the SQLite file. Ephemeral hosting disks will lose monitoring history on restart.
+
+`FRONTEND_ORIGIN` accepts a comma-separated list of allowed frontend origins. CORS is configured by the backend and credentials remain server-side.
+
+## Verification
+
+```powershell
+cd backend
+npm test
+npm run db:init
+
+cd ..\frontend
+npm run build
+```
+
+With the backend running, verify:
 
 ```powershell
 Invoke-RestMethod http://localhost:5000/api/health

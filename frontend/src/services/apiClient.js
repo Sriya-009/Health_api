@@ -1,5 +1,6 @@
 const TOKEN_STORAGE_KEY = 'api-monitor-token';
 const USER_STORAGE_KEY = 'api-monitor-user';
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '');
 
 export function getStoredSession() {
   const token = window.localStorage.getItem(TOKEN_STORAGE_KEY);
@@ -29,7 +30,7 @@ export function clearStoredSession() {
 }
 
 async function request(path, { token, ...options } = {}) {
-  const response = await fetch(path, {
+  const response = await fetch(`${API_BASE_URL}${path}`, {
     ...options,
     headers: {
       'Content-Type': 'application/json',
